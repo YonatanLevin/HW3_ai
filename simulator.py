@@ -242,7 +242,7 @@ class Simulator:
             raise ValueError(f"Illegal action!")
 
     def print_scores(self):
-        print(f"Scores: player 1: {self.score[0]}, player 2: {self.score[1]}")
+        print(f"Scores: player 1: {self.score['player 1']}, player 2: {self.score['player 2']}")
 
     def print_state(self):
         for key, value in self.state.items():
@@ -262,7 +262,7 @@ class Simulator:
         self.state = state
 
     def get_state(self):
-        return self.state
+        return deepcopy(self.state)
 
     def get_score(self):
         return self.score

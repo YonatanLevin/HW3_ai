@@ -45,7 +45,7 @@ class Game:
         return action
 
     def play_episode(self, swapped=False):
-        length_of_episode = self.initial_state["turns to go"]
+        length_of_episode = int(self.initial_state["turns to go"]/2)
         for i in range(length_of_episode):
             for number, agent in enumerate(self.agents):
                 try:
@@ -70,6 +70,8 @@ class Game:
         else:
             self.score[0] += self.simulator.get_score()['player 2']
             self.score[1] += self.simulator.get_score()['player 1']
+
+
             print(f'***********  end of round!  ************ \n \n')
 
     def play_game(self):
