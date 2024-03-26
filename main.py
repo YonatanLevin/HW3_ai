@@ -1,5 +1,5 @@
 from simulator import Simulator
-import exp3
+import exp3_213125164_325407054
 import sample_agent
 from copy import deepcopy
 import time
@@ -80,7 +80,7 @@ class Game:
         the general agent. You may also use an agent of your own, instead of sample agent.
         """
         print(f'***********  starting a first round!  ************ \n \n')
-        self.agents = [self.initiate_agent(exp3, 1),
+        self.agents = [self.initiate_agent(exp3_213125164_325407054, 1),
                        self.initiate_agent(sample_agent, 2)]
         self.ids = ['Your agent', 'Rival agent']
         self.play_episode()
@@ -90,7 +90,7 @@ class Game:
         self.simulator = Simulator(self.initial_state)
 
         self.agents = [self.initiate_agent(sample_agent, 1),
-                       self.initiate_agent(exp3, 2)]
+                       self.initiate_agent(exp3_213125164_325407054, 2)]
         self.ids = ['Rival agent', 'Your agent']
         self.play_episode(swapped=True)
         print(f'end of game!')
@@ -134,7 +134,7 @@ def main():
     }
     game = Game(an_input)
     results = game.play_game()
-    print(f'Score for {exp3.IDS} is {results[0]}, score for {sample_agent.IDS} is {results[1]}')
+    print(f'Score for {exp3_213125164_325407054.IDS} is {results[0]}, score for {sample_agent.IDS} is {results[1]}')
 
 
 if __name__ == '__main__':
