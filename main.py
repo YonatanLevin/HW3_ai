@@ -80,7 +80,7 @@ class Game:
         the general agent. You may also use an agent of your own, instead of sample agent.
         """
         print(f'***********  starting a first round!  ************ \n \n')
-        self.agents = [self.initiate_agent(exp3_213125164_325407054, 1, UCT_flag=True),
+        self.agents = [self.initiate_agent(exp3_213125164_325407054, 1, UCT_flag=False),
                        self.initiate_agent(sample_agent, 2)]
         self.ids = ['Your agent', 'Rival agent']
         self.play_episode()
@@ -90,7 +90,7 @@ class Game:
         self.simulator = Simulator(self.initial_state)
 
         self.agents = [self.initiate_agent(sample_agent, 1),
-                       self.initiate_agent(exp3_213125164_325407054, 2, UCT_flag=True)]
+                       self.initiate_agent(exp3_213125164_325407054, 2, UCT_flag=False)]
         self.ids = ['Rival agent', 'Your agent']
         self.play_episode(swapped=True)
         print(f'end of game!')
@@ -130,7 +130,7 @@ def main():
                          'marine_2': {"index": 0,
                                       "path": [(2, 5), (2, 4), (3, 4), (4, 4)]}
                          },
-        "turns to go": 10
+        "turns to go": 50
     }
     game = Game(an_input)
     results = game.play_game()

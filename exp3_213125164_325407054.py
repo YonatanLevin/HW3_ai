@@ -21,21 +21,197 @@ def check_time(start, timeout):
         raise TimeoutError("")
 
 
+def heuristic(state, player_number, heuristic_name):
+    return heuristic_name(state, player_number)
+
+
+def heuristic_1(state, player_number):
+    base = state["base"]
+    total = 0
+    for ship_name, ship_value in state["pirate_ships"].items():
+        if ship_value["player"] != player_number:
+            break
+        treasures = [treasure for treasure in state["treasures"].values() if treasure["location"] == ship_name]
+        reward = sum([treasure["reward"] for treasure in treasures])
+        distance = abs(base[0] - ship_value["location"][0]) + abs(base[1] - ship_value["location"][1])
+        total += reward / (distance + 1)
+    return total
+
+
+class Node:
+    """
+    A class for a single node
+    """
+
+    def __init__(self, state, player_number, parent=None, move=None):
+        self.state = state
+        self.parent = parent
+        self.move = move
+        self.wins = 0
+        self.visits = 0
+        self.children = []
+        self.player_number = player_number
+
+    def add_child(self, child_state, move):
+        child = Node(child_state, self.player_number, self, move)
+        self.children.append(child)
+        return child
+
+    def select_child(self, simulator):
+        return max(self.children, key=lambda child: child.uct_value(simulator))
+
+    def expand(self, actions):
+        for action in actions:
+            self.add_child(self.state, action)
+
+    def update(self, result):
+        self.visits += 1
+        self.wins += result
+
+    def uct_value(self, simulator) -> float:
+        if not check_if_action_legal(simulator, self.move, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2):
+            return float('-inf')
+        if self.visits == 0:
+            return float('inf')
+        return self.wins / self.visits + math.sqrt(2 * math.log(self.parent.visits) / self.visits)
+
+
 class Agent:
     def __init__(self, initial_state, player_number):
+        self.start = time.time()
+        self.node_dict = dict()  # state: state_node
         self.ids = IDS
         self.player_number = player_number
-        self.my_ships = []
-        self.simulator = Simulator(initial_state)
-        for ship_name, ship in initial_state['pirate_ships'].items():
-            if ship['player'] == player_number:
-                self.my_ships.append(ship_name)
+        self.initial_state = initial_state
+        self.my_ships = get_my_ships(initial_state, player_number)
+
+    def selection(self, node, simulator: Simulator, sample_agent: SampleAgent, start_time):
+        """
+        Select the best child nodes
+        :param node: node to start from
+        :param simulator: instance of the simulator
+        :param sample_agent: opponent agent
+        :param start_time: the start time of the time limited phase
+        :return: the best child nodes
+        """
+
+        # initialize the current node
+        current_node = node
+
+        turns = 0
+
+        # while the current node has children
+        while len(current_node.children) != 0:
+            check_time(start_time, ACTION_TIMEOUT)
+            turns += 1
+            # select the best child node
+
+            # apply the action of the current node
+            if self.player_number == PLAYER_1:
+                current_node = current_node.select_child(simulator)
+                simulator.apply_action(current_node.move, self.player_number)
+                simulator.add_treasure()
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
+            else:
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
+                simulator.add_treasure()
+                current_node = current_node.select_child(simulator)
+                simulator.apply_action(current_node.move, self.player_number)
+            simulator.add_treasure()
+            simulator.check_collision_with_marines()
+            simulator.move_marines()
+
+        # return the current node
+        return current_node, turns
+
+    def expansion(self, parent_node: Node, simulator: Simulator):
+        """
+        Expand the parent node
+        :param simulator:
+        :param parent_node: parent node
+        """
+
+        # getting all the possible actions
+        action_list = self.get_actions(simulator)
+
+        # expanding the parent node
+        parent_node.expand(action_list)
+
+    def simulation(self, node, simulator: Simulator, sample_agent: SampleAgent, turns, turns_to_go, start,
+                   heuristic_name) -> int:
+        """
+        Preforms a random simulation
+        """
+
+        # initialize the current node
+        current_node = node
+
+        # running the simulation
+        my_sample_agent = SampleAgent(current_node.state, self.player_number)
+        for i in range(turns_to_go - turns):
+            check_time(start, ACTION_TIMEOUT)
+
+            if self.player_number == PLAYER_1:
+                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
+                simulator.add_treasure()
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
+            else:
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
+                simulator.add_treasure()
+                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
+            simulator.add_treasure()
+            simulator.check_collision_with_marines()
+            simulator.move_marines()
+
+        score = simulator.get_score()
+        my_name = PLAYER_1_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME
+        his_name = PLAYER_2_NAME if self.player_number == PLAYER_1 else PLAYER_1_NAME
+        his_number = PLAYER_2 if self.player_number == PLAYER_1 else PLAYER_1
+        return (score[my_name] + heuristic(simulator.state, self.player_number, heuristic_name) -
+                score[his_name] - heuristic(simulator.state, his_number, heuristic_name))
+
+    def backpropagation(self, node, simulation_result):
+        while node is not None:
+            node.update(simulation_result)
+            node = node.parent
 
     def act(self, state):
-        raise NotImplementedError
+        return self.mcts(state).move
+
+    def get_actions(self, simulator):
+        actions = {}
+        collected_treasures = []
+        state = simulator.state
+        for ship in self.my_ships:
+            actions[ship] = get_actions_for_ship(ship, state, collected_treasures, simulator, self.player_number)
+        all_combinations = list(itertools.product(*actions.values()))
+        return all_combinations
+
+    def mcts(self, state):
+        start = time.time()
+        root = UCTNode(state, self.player_number)
+        turns_to_go = state["turns to go"]
+        try:
+            while True:
+                check_time(start, ACTION_TIMEOUT)
+                simulator = Simulator(state)
+                sample_agent = SampleAgent(state, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2)
+                check_time(start, ACTION_TIMEOUT)
+                node, turns = self.selection(root, simulator, sample_agent, start)
+                self.expansion(node, simulator)
+                result = self.simulation(node, simulator, sample_agent, turns, turns_to_go, start, heuristic_1)
+                self.backpropagation(node, result)
+        except TimeoutError:
+            pass
+
+        if len(root.children) == 0:
+            return root
+
+        return max(root.children,
+                   key=lambda child: child.wins / child.visits if child.visits > 0 else 0)
 
 
-# -------------------------------------------- UCT Node --------------------------------------------
+# -------------------------------------------- UCT Node ------------------------------------------------------------
 
 
 class UCTNode:
@@ -69,7 +245,7 @@ class UCTNode:
         self.wins += result
 
     def uct_value(self, simulator) -> float:
-        if not check_if_action_legal(simulator, self.move, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2):
+        if not check_if_action_legal(simulator, self.move, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2):
             return float('-inf')
         if self.visits == 0:
             return float('inf')
@@ -151,7 +327,7 @@ class UCTAgent:
         self.initial_state = initial_state
         self.my_ships = get_my_ships(initial_state, player_number)
 
-    def selection(self, node: UCTNode, simulator: Simulator, sample_agent: SampleAgent):
+    def selection(self, node: UCTNode, simulator: Simulator, sample_agent: SampleAgent, start_time):
         """
         Select the best child nodes
         :param node: node to start from
@@ -163,20 +339,31 @@ class UCTAgent:
         # initialize the current node
         current_node = node
 
+        turns = 0
+
         # while the current node has children
         while len(current_node.children) != 0:
-            check_time(self.start, ACTION_TIMEOUT)
-
+            check_time(start_time, ACTION_TIMEOUT)
+            turns += 1
             # select the best child node
-            current_node = current_node.select_child(simulator)
 
             # apply the action of the current node
-            simulator.apply_action(current_node.move, self.player_number)
-            simulator.apply_action(sample_agent.act(simulator.state),
-                                   PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2)
+            if self.player_number == PLAYER_1:
+                current_node = current_node.select_child(simulator)
+                simulator.apply_action(current_node.move, self.player_number)
+                simulator.add_treasure()
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
+            else:
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
+                simulator.add_treasure()
+                current_node = current_node.select_child(simulator)
+                simulator.apply_action(current_node.move, self.player_number)
+            simulator.add_treasure()
+            simulator.check_collision_with_marines()
+            simulator.move_marines()
 
         # return the current node
-        return current_node
+        return current_node, turns
 
     def expansion(self, parent_node: UCTNode, simulator: Simulator):
         """
@@ -191,7 +378,7 @@ class UCTAgent:
         # expanding the parent node
         parent_node.expand(action_list)
 
-    def simulation(self, node, simulator: Simulator, sample_agent: SampleAgent) -> int:
+    def simulation(self, node, simulator: Simulator, sample_agent: SampleAgent, turns, turns_to_go, start) -> int:
         """
         Preforms a random simulation
         """
@@ -201,17 +388,24 @@ class UCTAgent:
 
         # running the simulation
         my_sample_agent = SampleAgent(current_node.state, self.player_number)
-        for i in range(5):
-            check_time(self.start, ACTION_TIMEOUT)
+        for i in range(turns_to_go - turns):
+            check_time(start, ACTION_TIMEOUT)
 
-            # apply the action of the current node
-            simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
-            simulator.apply_action(sample_agent.act(simulator.state),
-                                   PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2)
+            if self.player_number == PLAYER_1:
+                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
+                simulator.add_treasure()
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
+            else:
+                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
+                simulator.add_treasure()
+                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
+            simulator.add_treasure()
+            simulator.check_collision_with_marines()
+            simulator.move_marines()
 
         score = simulator.get_score()
         return (score[PLAYER_1_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME] -
-                score[PLAYER_2_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME])
+                score[PLAYER_2_NAME if self.player_number == PLAYER_1 else PLAYER_1_NAME])
 
     def backpropagation(self, node, simulation_result):
         while node is not None:
@@ -231,17 +425,19 @@ class UCTAgent:
         return all_combinations
 
     def mcts(self, state) -> UCTNode:
+        start = time.time()
         root = UCTNode(state, self.player_number)
+        turns_to_go = state["turns to go"]
         try:
             while True:
-                check_time(self.start, ACTION_TIMEOUT)
+                check_time(start, ACTION_TIMEOUT)
                 simulator = Simulator(state)
                 sample_agent = SampleAgent(state, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2)
-                check_time(self.start, ACTION_TIMEOUT)
-                self.node = self.selection(root, simulator, sample_agent)
-                self.expansion(self.node, simulator)
-                result = self.simulation(self.node, simulator, sample_agent)
-                self.backpropagation(self.node, result)
+                check_time(start, ACTION_TIMEOUT)
+                node, turns = self.selection(root, simulator, sample_agent, start)
+                self.expansion(node, simulator)
+                result = self.simulation(node, simulator, sample_agent, turns, turns_to_go, start)
+                self.backpropagation(node, result)
         except TimeoutError:
             pass
 
@@ -249,7 +445,7 @@ class UCTAgent:
             return root
 
         return max(root.children,
-                   key=lambda child: child.wins / child.visits if child.visits > 0 else 0)  # No exploration
+                   key=lambda child: child.wins / child.visits if child.visits > 0 else 0)
 
 
 def check_if_action_legal(simulator, action, player):
