@@ -108,7 +108,6 @@ class Node:
 class Agent:
     def __init__(self, initial_state, player_number):
         self.start = time.time()
-        self.prev_actions = dict()
         self.ids = IDS
         self.player_number = player_number
         self.initial_state = initial_state
@@ -271,14 +270,15 @@ class UCTNode:
         self.visits = 0
         self.children = []
         self.player_number = player_number
+        self.his_number = his_number(player_number)
 
     def add_child(self, child_state, move):
-        child = UCTNode(child_state, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2, self, move)
+        child = UCTNode(child_state, self.his_number, self, move)
         self.children.append(child)
         return child
 
-    def select_child(self, simulator, moves, player):
-        return max(self.children, key=lambda child: child.uct_value(simulator, moves, player))
+    def select_child(self, simulator, moves):
+        return max(self.children, key=lambda child: child.uct_value(simulator, moves))
 
     def expand(self, actions):
         for action in actions:
@@ -288,9 +288,8 @@ class UCTNode:
         self.visits += 1
         self.wins += result
 
-    def uct_value(self, simulator, moves, player) -> float:
-        if not check_if_action_legal(simulator, self.move, player,
-                                     moves):
+    def uct_value(self, simulator, moves) -> float:
+        if not check_if_action_legal(simulator, self.move, self.his_number, moves):
             return float('-inf')
         if self.visits == 0:
             return float('inf')
@@ -344,8 +343,7 @@ def get_collect_actions(ship, state, collected_treasures, simulator, neighbors_d
             treasure_loc = state["treasures"][treasure]["location"]
             if type(treasure_loc) == str:
                 continue
-            if pirate_loc in neighbors_dict[
-                treasure_loc] and treasure not in collected_treasures:
+            if pirate_loc in neighbors_dict[treasure_loc] and treasure not in collected_treasures:
                 actions.add(("collect", ship, treasure))
     return actions
 
@@ -403,33 +401,44 @@ def get_sail_actions(state, player, neighbors):
     return sail_actions
 
 
+def his_number(number):
+    return PLAYER_1 if number == PLAYER_2 else PLAYER_2
+
+
 class UCTAgent:
     def __init__(self, initial_state, player_number):
         self.start = time.time()
-        self.prev_actions = dict()
         self.ids = IDS
         self.player_number = player_number
+        self.his_number = his_number(player_number)
         self.initial_state = initial_state
         self.my_ships = get_my_ships(initial_state, player_number)
-        self.his_ships = get_my_ships(initial_state, PLAYER_1 if player_number == PLAYER_2 else PLAYER_2)
-        # self.actions_by_location = get_actions_by_location(initial_state, player_number)
+        self.his_ships = get_my_ships(initial_state, self.his_number)
         self.moves_by_location = get_neighbor_dict(initial_state['map'])
         self.my_sail_actions = get_sail_actions(initial_state, player_number, self.moves_by_location)
-        self.his_sail_actions = get_sail_actions(initial_state, PLAYER_1 if player_number == PLAYER_2 else PLAYER_2
-                                                 , self.moves_by_location)
+        self.his_sail_actions = get_sail_actions(initial_state, self.his_number, self.moves_by_location)
         self.turn = -1
 
     def selection(self, node: UCTNode, simulator: Simulator, start_time, player):
+
         check_time(start_time, ACTION_TIMEOUT)
+
+        # base of recursion
         if len(node.children) == 0:
             return node, 0, player
+
+        # selecting next node (action)
         current_node = node
-        current_node = current_node.select_child(simulator, self.moves_by_location, player)
+        current_node = current_node.select_child(simulator, self.moves_by_location)
+
+        # applying the action
         simulator.apply_action(current_node.move, player)
         simulator.add_treasure()
+
         if player == 1:
             rec_result = self.selection(current_node, simulator, start_time, 2)
             return rec_result[0], rec_result[1] + 1, rec_result[2]
+
         simulator.check_collision_with_marines()
         simulator.move_marines()
         return self.selection(current_node, simulator, start_time, 1)
@@ -448,7 +457,7 @@ class UCTAgent:
         parent_node.expand(action_list)
 
     def simulation(self, node, simulator: Simulator, sample_agent, my_sample_agent, turns_to_go, start,
-                       player) -> int:
+                   player) -> int:
         if turns_to_go == 0:
             score = simulator.score
             return (score[PLAYER_1_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME] -
@@ -459,7 +468,7 @@ class UCTAgent:
             simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
         else:
             simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1 if self.player_number == PLAYER_2
-                                    else PLAYER_2)
+            else PLAYER_2)
         simulator.add_treasure()
         if player == 1:
             return self.simulation(node, simulator, sample_agent, my_sample_agent, turns_to_go, start, 2)
@@ -469,18 +478,23 @@ class UCTAgent:
 
     def backpropagation(self, node, simulation_result):
         while node is not None:
-            node.update(simulation_result)
+            prod = 1
+            if node.player_number == self.player_number:
+                prod = -1
+            node.update(simulation_result * prod)
             node = node.parent
 
     def act(self, state):
         return self.mcts(state).move
 
     def get_actions(self, simulator, player):
-        # print(player)
+
         actions = {}
         collected_treasures = []
         state = simulator.state
+
         ships = self.my_ships if player == self.player_number else self.his_ships
+
         for ship in ships:
             actions[ship] = get_actions_for_ship(ship, state, collected_treasures, simulator, player,
                                                  self.moves_by_location)
@@ -488,31 +502,43 @@ class UCTAgent:
         return all_combinations
 
     def mcts(self, state) -> UCTNode:
+
         start = time.time()
+
         root = UCTNode(state, self.player_number)
+
         turns_to_go = state["turns to go"] // 2
         self.turn += 1
         turns_to_go = turns_to_go - self.turn
-        # print(turns_to_go)
+
         count_simulations = 0
+
         try:
             while True:
+
                 check_time(start, ACTION_TIMEOUT)
+
                 simulator = Simulator(state)
+
                 sample_agent = RandomSampleAgent(state, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2,
-                                                 self.moves_by_location, self.his_ships, self.his_sail_actions,
-                                                 )
+                                                 self.moves_by_location, self.his_ships, self.his_sail_actions)
                 my_sample_agent = RandomSampleAgent(state, self.player_number,
-                                                 self.moves_by_location, self.my_ships, self.my_sail_actions,
-                                                 )
+                                                    self.moves_by_location, self.my_ships, self.my_sail_actions)
+
                 check_time(start, ACTION_TIMEOUT)
-                node, turns, player = self.selection(root, simulator, start, 1)
+
+                node, turns, player = self.selection(root, simulator, start, self.player_number)
+
                 if turns >= turns_to_go:
                     break
+
                 self.expansion(node, simulator, player)
+
                 result = self.simulation(node, simulator, sample_agent, my_sample_agent, turns_to_go - turns, start,
                                          player)
+
                 self.backpropagation(node, result)
+
                 count_simulations += 1
         except TimeoutError:
             pass
