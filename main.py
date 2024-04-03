@@ -63,6 +63,7 @@ class Game:
                 print(f"{agent.ids} chose {action}")
             self.simulator.check_collision_with_marines()
             self.simulator.move_marines()
+            print(self.simulator.get_score())
             print(f"-----")
         if not swapped:
             self.score[0] += self.simulator.get_score()['player 1']
@@ -70,7 +71,6 @@ class Game:
         else:
             self.score[0] += self.simulator.get_score()['player 2']
             self.score[1] += self.simulator.get_score()['player 1']
-
 
             print(f'***********  end of round!  ************ \n \n')
 
@@ -130,7 +130,7 @@ def main():
                          'marine_2': {"index": 0,
                                       "path": [(2, 5), (2, 4), (3, 4), (4, 4)]}
                          },
-        "turns to go": 50
+        "turns to go": 200
     }
     game = Game(an_input)
     results = game.play_game()
