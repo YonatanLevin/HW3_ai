@@ -59,8 +59,6 @@ def action_heuristic(move):
             value += 3
         elif atomic_action[0] == 'deposit':
             value += 5
-        elif atomic_action[0] == 'plunder':
-            value += 2
         elif atomic_action[0] == 'wait':
             value -= 0.5
     return value
@@ -81,7 +79,6 @@ class Node:
         self.player_number = player_number
         self.h = action_heuristic(move)
 
-
     def add_child(self, child_state, move):
         child = Node(child_state, self.player_number, self, move)
         self.children.append(child)
@@ -99,8 +96,9 @@ class Node:
         self.wins += result
 
     def uct_value(self, simulator, moves) -> float:
-        if not check_if_action_legal(simulator, self.move, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2,
-                                     moves):
+        if not check_if_action_legal_better(simulator, self.move,
+                                            PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2,
+                                            moves):
             return float('-inf')
         if self.visits == 0:
             return 9999 + self.h
@@ -121,6 +119,7 @@ class Agent:
         self.my_sail_actions = get_sail_actions(initial_state, player_number, self.moves_by_location)
         self.his_sail_actions = get_sail_actions(initial_state, PLAYER_1 if player_number == PLAYER_2 else PLAYER_2
                                                  , self.moves_by_location)
+        self.turn = -1
 
     def selection(self, node: Node, simulator: Simulator, sample_agent, start_time):
         """
@@ -183,8 +182,8 @@ class Agent:
         current_node = node
 
         # running the simulation
-        my_sample_agent = MySampleAgent(current_node.state, self.player_number, self.moves_by_location, self.my_ships
-                                        , self.my_sail_actions)
+        my_sample_agent = BetterSample(current_node.state, self.player_number, self.moves_by_location, self.my_ships
+                                       , self.my_sail_actions)
         for i in range(turns_to_go - turns):
             check_time(start, ACTION_TIMEOUT)
 
@@ -226,6 +225,9 @@ class Agent:
         start = time.time()
         root = Node(state, self.player_number)
         turns_to_go = state["turns to go"] // 2
+        self.turn += 1
+        turns_to_go = turns_to_go - self.turn
+        # print(turns_to_go)
         count_simulations = 0
         try:
             while True:
@@ -244,7 +246,7 @@ class Agent:
                 count_simulations += 1
         except TimeoutError:
             pass
-        print(f'count_simulations: {count_simulations}')
+        # print(f'count_simulations: {count_simulations}')
 
         if len(root.children) == 0:
             return root
@@ -271,12 +273,12 @@ class UCTNode:
         self.player_number = player_number
 
     def add_child(self, child_state, move):
-        child = UCTNode(child_state, self.player_number, self, move)
+        child = UCTNode(child_state, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2, self, move)
         self.children.append(child)
         return child
 
-    def select_child(self, simulator, moves):
-        return max(self.children, key=lambda child: child.uct_value(simulator, moves))
+    def select_child(self, simulator, moves, player):
+        return max(self.children, key=lambda child: child.uct_value(simulator, moves, player))
 
     def expand(self, actions):
         for action in actions:
@@ -286,8 +288,8 @@ class UCTNode:
         self.visits += 1
         self.wins += result
 
-    def uct_value(self, simulator, moves) -> float:
-        if not check_if_action_legal(simulator, self.move, PLAYER_1 if self.player_number == PLAYER_1 else PLAYER_2,
+    def uct_value(self, simulator, moves, player) -> float:
+        if not check_if_action_legal(simulator, self.move, player,
                                      moves):
             return float('-inf')
         if self.visits == 0:
@@ -415,47 +417,24 @@ class UCTAgent:
         self.my_sail_actions = get_sail_actions(initial_state, player_number, self.moves_by_location)
         self.his_sail_actions = get_sail_actions(initial_state, PLAYER_1 if player_number == PLAYER_2 else PLAYER_2
                                                  , self.moves_by_location)
+        self.turn = -1
 
-    def selection(self, node: UCTNode, simulator: Simulator, sample_agent, start_time):
-        """
-        Select the best child nodes
-        :param node: node to start from
-        :param simulator: instance of the simulator
-        :param sample_agent: opponent agent
-        :param start_time: the start time of the time limited phase
-        :return: the best child nodes
-        """
-
-        # initialize the current node
+    def selection(self, node: UCTNode, simulator: Simulator, start_time, player):
+        check_time(start_time, ACTION_TIMEOUT)
+        if len(node.children) == 0:
+            return node, 0, player
         current_node = node
+        current_node = current_node.select_child(simulator, self.moves_by_location, player)
+        simulator.apply_action(current_node.move, player)
+        simulator.add_treasure()
+        if player == 1:
+            rec_result = self.selection(current_node, simulator, start_time, 2)
+            return rec_result[0], rec_result[1] + 1, rec_result[2]
+        simulator.check_collision_with_marines()
+        simulator.move_marines()
+        return self.selection(current_node, simulator, start_time, 1)
 
-        turns = 0
-
-        # while the current node has children
-        while len(current_node.children) != 0:
-            check_time(start_time, ACTION_TIMEOUT)
-            turns += 1
-            # select the best child node
-
-            # apply the action of the current node
-            if self.player_number == PLAYER_1:
-                current_node = current_node.select_child(simulator, self.moves_by_location)
-                simulator.apply_action(current_node.move, self.player_number)
-                simulator.add_treasure()
-                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
-            else:
-                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
-                simulator.add_treasure()
-                current_node = current_node.select_child(simulator, self.moves_by_location)
-                simulator.apply_action(current_node.move, self.player_number)
-            simulator.add_treasure()
-            simulator.check_collision_with_marines()
-            simulator.move_marines()
-
-        # return the current node
-        return current_node, turns
-
-    def expansion(self, parent_node: UCTNode, simulator: Simulator):
+    def expansion(self, parent_node: UCTNode, simulator: Simulator, player):
         """
         Expand the parent node
         :param simulator:
@@ -463,40 +442,30 @@ class UCTAgent:
         """
 
         # getting all the possible actions
-        action_list = self.get_actions(simulator)
+        action_list = self.get_actions(simulator, player)
 
         # expanding the parent node
         parent_node.expand(action_list)
 
-    def simulation(self, node, simulator: Simulator, sample_agent, turns, turns_to_go, start) -> int:
-        """
-        Preforms a random simulation
-        """
+    def simulation(self, node, simulator: Simulator, sample_agent, my_sample_agent, turns_to_go, start,
+                       player) -> int:
+        if turns_to_go == 0:
+            score = simulator.score
+            return (score[PLAYER_1_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME] -
+                    score[PLAYER_2_NAME if self.player_number == PLAYER_1 else PLAYER_1_NAME])
 
-        # initialize the current node
-        current_node = node
-
-        # running the simulation
-        my_sample_agent = MySampleAgent(current_node.state, self.player_number, self.moves_by_location, self.my_ships
-                                        , self.my_sail_actions)
-        for i in range(turns_to_go - turns):
-            check_time(start, ACTION_TIMEOUT)
-
-            if self.player_number == PLAYER_1:
-                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
-                simulator.add_treasure()
-                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_2)
-            else:
-                simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1)
-                simulator.add_treasure()
-                simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
-            simulator.add_treasure()
-            simulator.check_collision_with_marines()
-            simulator.move_marines()
-
-        score = simulator.get_score()
-        return (score[PLAYER_1_NAME if self.player_number == PLAYER_1 else PLAYER_2_NAME] -
-                score[PLAYER_2_NAME if self.player_number == PLAYER_1 else PLAYER_1_NAME])
+        check_time(start, ACTION_TIMEOUT)
+        if player == self.player_number:
+            simulator.apply_action(my_sample_agent.act(simulator.state), self.player_number)
+        else:
+            simulator.apply_action(sample_agent.act(simulator.state), PLAYER_1 if self.player_number == PLAYER_2
+                                    else PLAYER_2)
+        simulator.add_treasure()
+        if player == 1:
+            return self.simulation(node, simulator, sample_agent, my_sample_agent, turns_to_go, start, 2)
+        simulator.check_collision_with_marines()
+        simulator.move_marines()
+        return self.simulation(node, simulator, sample_agent, my_sample_agent, turns_to_go - 1, start, 1)
 
     def backpropagation(self, node, simulation_result):
         while node is not None:
@@ -506,12 +475,14 @@ class UCTAgent:
     def act(self, state):
         return self.mcts(state).move
 
-    def get_actions(self, simulator):
+    def get_actions(self, simulator, player):
+        # print(player)
         actions = {}
         collected_treasures = []
         state = simulator.state
-        for ship in self.my_ships:
-            actions[ship] = get_actions_for_ship(ship, state, collected_treasures, simulator, self.player_number,
+        ships = self.my_ships if player == self.player_number else self.his_ships
+        for ship in ships:
+            actions[ship] = get_actions_for_ship(ship, state, collected_treasures, simulator, player,
                                                  self.moves_by_location)
         all_combinations = list(itertools.product(*actions.values()))
         return all_combinations
@@ -520,25 +491,32 @@ class UCTAgent:
         start = time.time()
         root = UCTNode(state, self.player_number)
         turns_to_go = state["turns to go"] // 2
+        self.turn += 1
+        turns_to_go = turns_to_go - self.turn
+        # print(turns_to_go)
         count_simulations = 0
         try:
             while True:
                 check_time(start, ACTION_TIMEOUT)
                 simulator = Simulator(state)
-                sample_agent = MySampleAgent(state, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2,
-                                             self.moves_by_location, self.his_ships, self.his_sail_actions,
-                                             )
+                sample_agent = RandomSampleAgent(state, PLAYER_1 if self.player_number == PLAYER_2 else PLAYER_2,
+                                                 self.moves_by_location, self.his_ships, self.his_sail_actions,
+                                                 )
+                my_sample_agent = RandomSampleAgent(state, self.player_number,
+                                                 self.moves_by_location, self.my_ships, self.my_sail_actions,
+                                                 )
                 check_time(start, ACTION_TIMEOUT)
-                node, turns = self.selection(root, simulator, sample_agent, start)
+                node, turns, player = self.selection(root, simulator, start, 1)
                 if turns >= turns_to_go:
                     break
-                self.expansion(node, simulator)
-                result = self.simulation(node, simulator, sample_agent, turns, turns_to_go, start)
+                self.expansion(node, simulator, player)
+                result = self.simulation(node, simulator, sample_agent, my_sample_agent, turns_to_go - turns, start,
+                                         player)
                 self.backpropagation(node, result)
                 count_simulations += 1
         except TimeoutError:
             pass
-        print(f'count_simulations: {count_simulations}')
+        # print(f'count_simulations: {count_simulations}')
 
         if len(root.children) == 0:
             return root
@@ -561,6 +539,7 @@ def check_if_action_legal(simulator, action, player, moves_by_location):
         return True
 
     def _is_collect_action_legal(collect_action, player):
+        # print(collect_action)
         pirate_name = collect_action[1]
         treasure_name = collect_action[2]
         if player != simulator.state['pirate_ships'][pirate_name]['player']:
@@ -636,6 +615,126 @@ def check_if_action_legal(simulator, action, player, moves_by_location):
         #         return False
         # trying to act with a pirate that is not yours
         if atomic_action[1] not in players_pirates:
+            # if atomic_action[0] == 'collect':
+            #     print(f'aa: {atomic_action}')
+            return False
+        # illegal sail action
+        # if atomic_action[0] == 'sail':
+        #     if not _is_move_action_legal(atomic_action, player):
+        #         return False
+        # illegal collect action
+        elif atomic_action[0] == 'collect':
+            # print(f'a: {atomic_action}')
+            if not _is_collect_action_legal(atomic_action, player):
+                return False
+        # illegal deposit action
+        elif atomic_action[0] == 'deposit':
+            if not _is_deposit_action_legal(atomic_action, player):
+                return False
+        # illegal plunder action
+        elif atomic_action[0] == "plunder":
+            if not _is_plunder_action_legal(atomic_action, player):
+                return False
+        # elif atomic_action[0] != 'wait':
+        #     return False
+    # check mutex action
+    if _is_action_mutex(action):
+        return False
+    return True
+
+
+def check_if_action_legal_better(simulator, action, player, moves_by_location):
+    def _is_move_action_legal(move_action, player):
+        pirate_name = move_action[1]
+        if pirate_name not in simulator.state['pirate_ships'].keys():
+            return False
+        if player != simulator.state['pirate_ships'][pirate_name]['player']:
+            return False
+        l1 = simulator.state['pirate_ships'][pirate_name]['location']
+        l2 = move_action[2]
+        if l2 not in moves_by_location[l1]:
+            return False
+        return True
+
+    def _is_collect_action_legal(collect_action, player):
+        pirate_name = collect_action[1]
+        treasure_name = collect_action[2]
+        if player != simulator.state['pirate_ships'][pirate_name]['player']:
+            return False
+        if treasure_name not in simulator.state['treasures']:
+            return False
+        # check adjacent position
+        l1 = simulator.state['treasures'][treasure_name]['location']
+        if type(l1) == str or simulator.state['pirate_ships'][pirate_name]['location'] not in moves_by_location[l1]:
+            return False
+        # check ship capacity
+        if simulator.state['pirate_ships'][pirate_name]['capacity'] <= 0:
+            return False
+        return True
+
+    def _is_deposit_action_legal(deposit_action, player):
+        pirate_name = deposit_action[1]
+        treasure_name = deposit_action[2]
+        # check same position
+        if player != simulator.state['pirate_ships'][pirate_name]['player']:
+            return False
+        if simulator.state["pirate_ships"][pirate_name]["location"] != simulator.base_location:
+            return False
+        if treasure_name not in simulator.state['treasures']:
+            return False
+        if simulator.state['treasures'][treasure_name]['location'] != pirate_name:
+            return False
+        return True
+
+    def _is_plunder_action_legal(plunder_action, player):
+        pirate_1_name = plunder_action[1]
+        pirate_2_name = plunder_action[2]
+        if player != simulator.state["pirate_ships"][pirate_1_name]["player"]:
+            return False
+        if simulator.state["pirate_ships"][pirate_1_name]["location"] != simulator.state["pirate_ships"][pirate_2_name][
+            "location"]:
+            return False
+        # checking if the capacity of the ship is smaller than 2
+        if simulator.state["pirate_ships"][pirate_2_name]["capacity"] == 2:
+            return False
+        return True
+
+    def _is_action_mutex(global_action):
+        assert type(
+            global_action) == tuple, "global action must be a tuple"
+        # one action per ship
+        if len(set([a[1] for a in global_action])) != len(global_action):
+            return True
+        # collect the same treasure
+        collect_actions = [a for a in global_action if a[0] == 'collect']
+        if len(collect_actions) > 1:
+            treasures_to_collect = set([a[2] for a in collect_actions])
+            if len(treasures_to_collect) != len(collect_actions):
+                return True
+
+        return False
+
+    # def get_possible_collect_action(simulator, player):
+    #     for pirate in simulator.state['pirate_ships'].keys():
+    #         if simulator.state['pirate_ships'][pirate]['player'] == player:
+    #             for treasure in simulator.state['treasures'].keys():
+    #                 if simulator.state['pirate_ships'][pirate]['location'] in simulator.neighbors(
+    #                         simulator.state['treasures'][treasure]['location']):
+    #                     return 'collect', pirate, treasure
+    #     return None
+
+    players_pirates = [pirate for pirate in simulator.state['pirate_ships'].keys() if
+                       simulator.state['pirate_ships'][pirate]['player'] == player]
+
+    if len(action) != len(players_pirates):
+        return False
+    for atomic_action in action:
+        # if atomic_action == 'collect':
+        #     atomic_action = get_possible_collect_action(simulator, player)
+        #     if atomic_action is None:
+        #         return False
+        # trying to act with a pirate that is not yours
+        if atomic_action[1] not in players_pirates:
             return False
         # illegal sail action
         # if atomic_action[0] == 'sail':
@@ -662,6 +761,53 @@ def check_if_action_legal(simulator, action, player, moves_by_location):
 
 
 ##########################################################################################################
+
+class RandomSampleAgent:
+    def __init__(self, initial_state, player_number, neighbors_dict, my_ships, sail_actions):
+        self.ids = IDS
+        self.player_number = player_number
+        self.my_ships = []
+        self.neighbors_dict = neighbors_dict
+        self.my_ships = my_ships
+        self.sail_actions = sail_actions
+        self.simulator = Simulator(initial_state)
+        # for ship_name, ship in initial_state['pirate_ships'].items():
+        #     if ship['player'] == player_number:
+        #         self.my_ships.append(ship_name)
+
+    def act(self, state):
+        actions = {}
+        self.simulator.set_state(state)
+        collected_treasures = []
+        for ship in self.my_ships:
+            actions[ship] = set()
+            ship_loc = state["pirate_ships"][ship]["location"]
+            actions[ship].update(self.sail_actions[(ship, ship_loc)])
+            if state["pirate_ships"][ship]["capacity"] > 0:
+                for treasure in state["treasures"].keys():
+                    treasure_loc = state["treasures"][treasure]["location"]
+                    if type(treasure_loc) == str:
+                        continue
+                    if (ship_loc in self.neighbors_dict[treasure_loc] and
+                            treasure not in collected_treasures):
+                        actions[ship].add(("collect", ship, treasure))
+                        collected_treasures.append(treasure)
+            for treasure in state["treasures"].keys():
+                if (ship_loc == state["base"]
+                        and state["treasures"][treasure]["location"] == ship):
+                    actions[ship].add(("deposit", ship, treasure))
+            for enemy_ship_name in state["pirate_ships"].keys():
+                if (ship_loc == state["pirate_ships"][enemy_ship_name]["location"] and
+                        self.player_number != state["pirate_ships"][enemy_ship_name]["player"]):
+                    actions[ship].add(("plunder", ship, enemy_ship_name))
+            actions[ship].add(("wait", ship))
+
+        whole_action = []
+        for atomic_actions in actions.values():
+            whole_action.append(random.choice(list(atomic_actions)))
+        return whole_action
+
+
 class MySampleAgent:
     def __init__(self, initial_state, player_number, neighbors_dict, my_ships, sail_actions):
         self.ids = IDS
@@ -714,3 +860,77 @@ class MySampleAgent:
             else:
                 whole_action.append(random.choice(list(atomic_actions)))
         return whole_action
+
+
+class BetterSample:
+    def __init__(self, initial_state, player_number, neighbors_dict, my_ships, sail_actions):
+        self.ids = IDS
+        self.player_number = player_number
+        self.my_ships = []
+        self.neighbors_dict = neighbors_dict
+        self.my_ships = my_ships
+        self.sail_actions = sail_actions
+        self.simulator = Simulator(initial_state)
+        # for ship_name, ship in initial_state['pirate_ships'].items():
+        #     if ship['player'] == player_number:
+        #         self.my_ships.append(ship_name)
+
+    def act(self, state):
+        actions = {}
+        self.simulator.set_state(state)
+        collected_treasures = []
+        for ship in self.my_ships:
+            actions[ship] = set()
+            ship_loc = state["pirate_ships"][ship]["location"]
+            # actions[ship].update(self.sail_actions[(ship, ship_loc)])
+            for neighbor, sail_action in zip(self.neighbors_dict[ship_loc],
+                                             self.sail_actions[(ship, ship_loc)]):
+                if (state["pirate_ships"][ship]["capacity"] == 2 or
+                        not is_marine_in_loc(state['marine_ships'], neighbor)):
+                    actions[ship].add(sail_action)
+            if state["pirate_ships"][ship]["capacity"] > 0:
+                for treasure in state["treasures"].keys():
+                    treasure_loc = state["treasures"][treasure]["location"]
+                    if type(treasure_loc) == str:
+                        continue
+                    if (ship_loc in self.neighbors_dict[treasure_loc] and
+                            treasure not in collected_treasures):
+                        actions[ship].add(("collect", ship, treasure))
+                        collected_treasures.append(treasure)
+            for treasure in state["treasures"].keys():
+                if (ship_loc == state["base"]
+                        and state["treasures"][treasure]["location"] == ship):
+                    actions[ship].add(("deposit", ship, treasure))
+            for enemy_ship_name in state["pirate_ships"].keys():
+                if (ship_loc == state["pirate_ships"][enemy_ship_name]["location"] and
+                        self.player_number != state["pirate_ships"][enemy_ship_name]["player"] and
+                        state["pirate_ships"][enemy_ship_name]["capacity"] < 2):
+                    actions[ship].add(("plunder", ship, enemy_ship_name))
+            actions[ship].add(("wait", ship))
+
+        whole_action = []
+        for atomic_actions in actions.values():
+            for action in atomic_actions:
+                if action[0] == "deposit":
+                    whole_action.append(action)
+                    break
+                if action[0] == "collect":
+                    whole_action.append(action)
+                    break
+            else:
+                whole_action.append(random.choice(list(atomic_actions)))
+        return whole_action
+
+
+def is_marine_in_loc(marines, loc):
+    """
+
+    :param marines: The marines in a state
+    :param loc: a location (i,j)
+    :return: Is there any
+    """
+    for marine in marines.values():
+        marine_index = marine['index']
+        if marine['path'][marine_index] == loc:
+            return True
+    return False
