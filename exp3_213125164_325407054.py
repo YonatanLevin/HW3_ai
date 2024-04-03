@@ -13,9 +13,15 @@ PLAYER_1 = 1
 PLAYER_2 = 2
 PLAYER_1_NAME = "player 1"
 PLAYER_2_NAME = "player 2"
+PENALTY = 10000
 
 
 def check_time(start, timeout):
+    """
+    :param start: start of phase time
+    :param timeout: max phase length
+    :raise TimeoutError: is a phase timed out
+    """
     if time.time() - start > timeout:
         raise TimeoutError("")
 
@@ -320,7 +326,8 @@ def get_actions_for_ship(ship, state, collected_treasures, simulator, player_num
     actions = set()
     neighboring_tiles = neighbors_dict[state["pirate_ships"][ship]["location"]]
     actions.update(('sail', ship, tile) for tile in neighboring_tiles)
-    actions.update(get_collect_actions(ship, state, collected_treasures, simulator))
+    actions.update(get_collect_actions(ship, state, collected_treasures, simulator, neighbors_dict))
+    # actions.add('collect')
     actions.update(get_deposit_actions(ship, state))
     actions.update(get_plunder_actions(ship, state, player_number))
     actions.add(("wait", ship))
@@ -329,6 +336,7 @@ def get_actions_for_ship(ship, state, collected_treasures, simulator, player_num
 
 def get_collect_actions(ship, state, collected_treasures, simulator, neighbors_dict):
     actions = set()
+    pirate_loc = state["pirate_ships"][ship]["location"]
     if state["pirate_ships"][ship]["capacity"] > 0:
         for treasure in state["treasures"].keys():
             treasure_loc = state["treasures"][treasure]["location"]
@@ -414,6 +422,7 @@ class UCTAgent:
         :param node: node to start from
         :param simulator: instance of the simulator
         :param sample_agent: opponent agent
+        :param start_time: the start time of the time limited phase
         :return: the best child nodes
         """
 
@@ -510,7 +519,8 @@ class UCTAgent:
     def mcts(self, state) -> UCTNode:
         start = time.time()
         root = UCTNode(state, self.player_number)
-        turns_to_go = state["turns to go"]
+        turns_to_go = state["turns to go"] // 2
+        count_simulations = 0
         try:
             while True:
                 check_time(start, ACTION_TIMEOUT)
@@ -525,8 +535,10 @@ class UCTAgent:
                 self.expansion(node, simulator)
                 result = self.simulation(node, simulator, sample_agent, turns, turns_to_go, start)
                 self.backpropagation(node, result)
+                count_simulations += 1
         except TimeoutError:
             pass
+        print(f'count_simulations: {count_simulations}')
 
         if len(root.children) == 0:
             return root
@@ -553,6 +565,8 @@ def check_if_action_legal(simulator, action, player, moves_by_location):
         treasure_name = collect_action[2]
         if player != simulator.state['pirate_ships'][pirate_name]['player']:
             return False
+        if treasure_name not in simulator.state['treasures']:
+            return False
         # check adjacent position
         l1 = simulator.state['treasures'][treasure_name]['location']
         if type(l1) == str or simulator.state['pirate_ships'][pirate_name]['location'] not in moves_by_location[l1]:
@@ -569,6 +583,8 @@ def check_if_action_legal(simulator, action, player, moves_by_location):
         if player != simulator.state['pirate_ships'][pirate_name]['player']:
             return False
         if simulator.state["pirate_ships"][pirate_name]["location"] != simulator.base_location:
+            return False
+        if treasure_name not in simulator.state['treasures']:
             return False
         if simulator.state['treasures'][treasure_name]['location'] != pirate_name:
             return False
